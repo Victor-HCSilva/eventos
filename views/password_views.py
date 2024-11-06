@@ -1,66 +1,75 @@
-import string
-import secrets
+import os
+import sys
 import base64
 import hashlib
 from pathlib import Path
 from cryptography.fernet import Fernet, InvalidToken
+import json
 
-class FernetHasher:
-    RANDOM_STRING_CHARS = string.ascii_lowercase + string.ascii_uppercase
+class PasswordManager:
     BASE_DIR = Path(__file__).resolve().parent.parent
-    KEY_DIR = BASE_DIR / 'keys' 
+    CONFIG_DIR = BASE_DIR / 'config'
+    CONFIG_FILE = CONFIG_DIR / 'config.json'
 
-    def __init__(self, key):
-        if not isinstance(key, bytes):
-            key = key.encode()
+    def __init__(self):
+        self.load_config()
 
-        self.fernet = Fernet(key)
+    def load_config(self):
+        if not self.CONFIG_DIR.exists():
+            self.CONFIG_DIR.mkdir()
+        if not self.CONFIG_FILE.exists():
+            self.create_config()
+        with open(self.CONFIG_FILE, 'r') as f:
+            self.config = json.load(f)
 
-    @classmethod
-    def _get_random_string(cls, length=25):
-        return ''.join(secrets.choice(cls.RANDOM_STRING_CHARS) for _ in range(length))
+    def create_config(self):
+        self.config = {"key": self.generate_key()}
+        with open(self.CONFIG_FILE, 'w') as f:
+            json.dump(self.config, f)
 
-    @classmethod
-    def create_key(cls, archive=False):
-        value = cls._get_random_string()
-        hasher = hashlib.sha256(value.encode('utf-8')).digest()
-        # Codifique a hash de forma segura
-        key = base64.b64encode(hasher).decode('utf-8')  # Decodifique para string para armazenamento
-        if archive:
-            return key, cls.archive_key(key.encode('utf-8'))  # Codifique a chave antes de gravar
-        return key, None
+    def generate_key(self):
+        key = base64.urlsafe_b64encode(os.urandom(32))
+        return key.decode()
 
-    @classmethod
-    def archive_key(cls, key):
-        file_name = 'key.key'
-        while (cls.KEY_DIR / file_name).exists():
-            file_name = f'key_{cls._get_random_string(5)}.key'
-
-        with open(cls.KEY_DIR / file_name, 'wb') as arquivo:
-            arquivo.write(key)
-        return cls.KEY_DIR / file_name
-
-    def encrypt(self, value):
-        if not isinstance(value, bytes):
-            value = value.encode()
-
-        return self.fernet.encrypt(value)
-
-    def decrypt(self, value):
-        if not isinstance(value, bytes):
-            value = value.encode()
+    def save_password(self, domain, password):
+        fernet = Fernet(self.config["key"].encode())
+        encrypted_password = fernet.encrypt(password.encode()).decode()
         try:
-            return self.fernet.decrypt(value).decode()  # Corrigido
-        except InvalidToken:
-            return 'Token Invalido'
+            with open(self.CONFIG_DIR / 'passwords.json', 'r') as f:
+                passwords = json.load(f)
+        except FileNotFoundError:
+            passwords = {}
+        passwords[domain] = encrypted_password
+        with open(self.CONFIG_DIR / 'passwords.json', 'w') as f:
+            json.dump(passwords, f)
+        print(f"Senha salva para o domínio {domain}")
+
+    def get_password(self, domain):
+        fernet = Fernet(self.config["key"].encode())
+        try:
+            with open(self.CONFIG_DIR / 'passwords.json', 'r') as f:
+                passwords = json.load(f)
+            if domain in passwords:
+                encrypted_password = passwords[domain]
+                decrypted_password = fernet.decrypt(encrypted_password.encode()).decode()
+                print(f"Senha para {domain}: {decrypted_password}")
+            else:
+                print(f"Nenhuma senha encontrada para o domínio {domain}")
+        except FileNotFoundError:
+            print(f"Nenhuma senha salva encontrada.")
 
 if __name__ == "__main__":
-    pass
-    # token gerado, chave
-    #fernet_teste = FernetHasher('KnLxX5n+mMwvOVcFthH26BZFGYsroKmj5ikCfQHTd5c=')
-    
-    #Criptografa
-    #print(fernet_teste.encrypt('senha123'))
-
-    #Decriptografa
-    #print(fernet_teste.decrypt('gAAAAABnKUtXryBSZqkBGY2SmYMe7jRMLSkZGynG_ZdmRvYhqTkWTSSfO9axrBc9V6talSlyx_KFNRsdQ73SnCvFaq9Kw5v6XA=='))
+    manager = PasswordManager()
+    while True:
+        action = input("Digite 1 para salvar uma senha, 2 para recuperar uma senha, ou 3 para sair: ")
+        if action == '1':
+            domain = input("Domínio: ")
+            password = input("Senha: ")
+            manager.save_password(domain, password)
+        elif action == '2':
+            domain = input("Domínio: ")
+            manager.get_password(domain)
+        elif action == '3':
+            break
+        else:
+            print("Opção inválida.")
